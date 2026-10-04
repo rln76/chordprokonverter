@@ -84,6 +84,13 @@
   .tools {
     display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0.5rem 0.75rem 0;
   }
+  .urlrow { display: flex; gap: 0.4rem; padding: 0.5rem 0.75rem 0; }
+  .urlrow input {
+    flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0.38rem 0.55rem; font: 400 0.85rem 'DM Sans', sans-serif;
+  }
+  .urlrow input::placeholder { color: var(--text-muted); }
+  .urlrow input:focus { border-color: var(--accent); outline: none; }
 
   .b {
     background: var(--surface2); border: 1px solid var(--border); color: var(--text);
@@ -315,6 +322,10 @@
       <button type="button" class="b" id="btnOpen" title="Åpne .txt- eller .docx-fil">Åpne fil</button>
       <button type="button" class="b" id="btnSample">Eksempel</button>
       <button type="button" class="b" id="btnClear">Tøm</button>
+    </div>
+    <div class="urlrow">
+      <input type="text" id="nortabsUrl" autocomplete="off" spellcheck="false" placeholder="Nortabs-lenke, f.eks. https://nortabs.net/tab/1616/" aria-label="Lenke til Nortabs-side">
+      <button type="button" class="b primary" id="btnNortabs" title="Henter tabben fra Nortabs og lager ChordPro">Hent fra Nortabs</button>
     </div>
     <div class="ed" id="edSrc"></div>
     <div class="legend" aria-label="Slik er linjene lest">
@@ -1712,6 +1723,83 @@ const dropHost = $('edSrc');
 ['dragenter', 'dragover'].forEach(t => dropHost.addEventListener(t, e => { e.preventDefault(); dropHost.classList.add('drop'); }));
 ['dragleave', 'drop'].forEach(t => dropHost.addEventListener(t, e => { e.preventDefault(); dropHost.classList.remove('drop'); }));
 dropHost.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+// ── Hent fra Nortabs ──
+// <<nortabs
+function nortabsId(s) {
+  const t = String(s || '').trim();
+  const m = t.match(/nortabs\.net\/tab\/(\d+)/i) || t.match(/^(\d{1,7})$/);
+  return m ? m[1] : null;
+}
+// Plukker ut tabben (<pre>), tittel og artist fra HTML-en til en Nortabs-side
+function parseNortabs(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const pres = [...doc.querySelectorAll('pre')];
+  if (!pres.length) return null;
+  const orig = pres.reduce((a, b) => b.textContent.length > a.textContent.length ? b : a);
+  const pre = orig.cloneNode(true);
+  pre.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+  const text = pre.textContent.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
+  if (!text.trim()) return null;
+  const clean = el => el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+  const before = tag => [...doc.querySelectorAll(tag)].filter(h => orig.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_PRECEDING).pop();
+  let title = clean(before('h2')), artist = clean(before('h3'));
+  if (!title || !artist) {   // reserve: «Artist - Tittel» fra og:title / <title>
+    const og = doc.querySelector('meta[property="og:title"]');
+    const raw = ((og && og.getAttribute('content')) || (doc.title || '').replace(/\s*\((?:Grep|Tab)\)\s*$/i, '')).trim();
+    const i = raw.indexOf(' - ');
+    if (i > 0) { artist = artist || raw.slice(0, i).trim(); title = title || raw.slice(i + 3).trim(); }
+    else title = title || raw;
+  }
+  return { title, artist, text };
+}
+// nortabs>>
+// Nettleseren får som regel ikke hente nortabs.net direkte (CORS), så vi prøver i rekkefølge:
+// 1) egen proxy hvis du har satt opp en (lim inn adressen i NORTABS_PROXY, f.eks. 'https://min-proxy.workers.dev/?id='),
+// 2) direkte, 3) en offentlig CORS-proxy.
+const NORTABS_PROXY = '';
+function nortabsSources(id) {
+  const u = 'https://nortabs.net/tab/' + id + '/';
+  const list = [];
+  if (NORTABS_PROXY) list.push(NORTABS_PROXY + id);
+  list.push(u, 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u));
+  return list;
+}
+async function fetchText(url, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.text();
+  } finally { clearTimeout(timer); }
+}
+async function fetchNortabs() {
+  const id = nortabsId($('nortabsUrl').value);
+  if (!id) { toast('Lim inn en lenke som ser ut som https://nortabs.net/tab/1616/'); return; }
+  const btn = $('btnNortabs');
+  btn.disabled = true; btn.textContent = 'Henter …';
+  try {
+    let res = null;
+    for (const src of nortabsSources(id)) {
+      try { res = parseNortabs(await fetchText(src, 8000)); } catch { res = null; }
+      if (res) break;
+    }
+    if (!res) throw new Error('Fikk ikke hentet tabben fra Nortabs. Kopier den fra siden og lim den inn i Original i stedet.');
+    if (S.dirty && !confirm('Dette overskriver ChordPro-teksten du har redigert. Fortsette?')) return;
+    ['fKey', 'fCapo', 'fSub', 'fComment'].forEach(i => { $(i).value = ''; });
+    $('fTitle').value = res.title; $('fArtist').value = res.artist;
+    S.dirty = false;
+    setSrc(res.text);
+    toast('Hentet «' + (res.title || 'sangen') + '» fra Nortabs');
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Hent fra Nortabs';
+  }
+}
+$('btnNortabs').onclick = fetchNortabs;
+$('nortabsUrl').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fetchNortabs(); } });
 
 // ── Innstillinger ──
 const CHECKS = { oHeader: 'header', oStrip: 'stripBoxes', oCollapse: 'collapse', oRecall: 'chorusRecall', oAuto: 'autoChorus', oFill: 'fillChords', oVerse: 'verseLabels' };
