@@ -1747,12 +1747,8 @@ $('btnDl').onclick = () => {
 function ghStoredRepo() {
   try { const v = (localStorage.getItem(GH_REPO_KEY) || '').trim(); return /^[\w.-]+\/[\w.-]+$/.test(v) ? v : ''; } catch { return ''; }
 }
+// Konverteren kan bo i et annet repo enn den skal skrive til – gjett derfor ikke ut fra URL-en, bruk alltid arkivets repo.
 function ghDetectRepo() {
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
-  if (m) {
-    const seg = location.pathname.split('/')[1] || '';
-    return m[1] + '/' + (seg && !seg.includes('.') ? seg : m[1] + '.github.io');
-  }
   return 'rln76/gitar';
 }
 const ghRepo = () => ghStoredRepo() || ghDetectRepo() || '';
