@@ -333,6 +333,7 @@
         <label>Toneart<input type="text" id="fKey" autocomplete="off"></label>
         <label>Capo<input type="text" id="fCapo" inputmode="numeric" autocomplete="off"></label>
         <label class="wide">Undertittel<input type="text" id="fSub" autocomplete="off" placeholder="f.eks. Tekst og melodi: Navn Navnesen"></label>
+        <label class="wide">Kommentar<input type="text" id="fComment" autocomplete="off" placeholder="f.eks. tags eller fri kommentar – vises i Sangarkivet"></label>
       </div>
       <div class="checks">
         <label><input type="checkbox" id="oHeader"> Les tittel og info øverst i teksten</label>
@@ -991,7 +992,8 @@ function convert(srcRaw, opts, ov) {
     artist: hdr ? hdr.artist : '',
     key: (hdr && hdr.key) || guessKey,
     capo: hdr ? hdr.capo : '',
-    subtitle: hdr && hdr.subtitle.length ? hdr.subtitle[0] : ''
+    subtitle: hdr && hdr.subtitle.length ? hdr.subtitle[0] : '',
+    comment: hdr ? hdr.comments.join('; ') : ''
   };
   const title = (ov.title || detected.title).trim();
   const artist = (ov.artist || detected.artist).trim();
@@ -1006,7 +1008,8 @@ function convert(srcRaw, opts, ov) {
   if (artist) head.push('{artist: ' + artist + '}');
   if (key) head.push('{key: ' + key + '}');
   if (capo) head.push('{capo: ' + capo + '}');
-  if (hdr) hdr.comments.forEach(c => head.push('{comment: ' + c + '}'));
+  if (ov.comment && ov.comment.trim()) head.push('{comment: ' + ov.comment.trim() + '}');
+  else if (hdr) hdr.comments.forEach(c => head.push('{comment: ' + c + '}'));
   if (head.length) out.push(head.join('\n'));
 
   if (stats.loose) notes.push(stats.loose + (stats.loose === 1 ? ' akkordlinje' : ' akkordlinjer') +
@@ -1358,7 +1361,7 @@ const GH_REPO_KEY = 'sangarkiv_ghrepo';
 const DEFAULT_OPTS = { header: true, stripBoxes: true, collapse: true, chorusRecall: true, autoChorus: false, fillChords: false, verseLabels: false, snap: 2, loose: 'spread' };
 const S = {
   src: '', cp: '', dirty: false, stale: false,
-  fields: { title: '', artist: '', key: '', capo: '', subtitle: '' },
+  fields: { title: '', artist: '', key: '', capo: '', subtitle: '', comment: '' },
   opts: { ...DEFAULT_OPTS },
   panes: { orig: true, cp: true, view: true },
   semis: null, fn: '', fnDirty: false, transposeSemis: 0
@@ -1465,7 +1468,7 @@ const cpEd = makeEditor($('edCp'), {
 
 // ── Konvertering ──
 function fieldValues() {
-  return { title: $('fTitle').value, artist: $('fArtist').value, key: $('fKey').value, capo: $('fCapo').value, subtitle: $('fSub').value };
+  return { title: $('fTitle').value, artist: $('fArtist').value, key: $('fKey').value, capo: $('fCapo').value, subtitle: $('fSub').value, comment: $('fComment').value };
 }
 function runConvert() {
   S.fields = fieldValues();
@@ -1476,6 +1479,7 @@ function runConvert() {
   $('fArtist').placeholder = d.artist || 'Artist';
   $('fKey').placeholder = d.key || 'f.eks. C eller Am';
   $('fCapo').placeholder = d.capo || 'ingen';
+  $('fComment').placeholder = d.comment || 'f.eks. tags eller fri kommentar – vises i Sangarkivet';
   renderStats();
   if (!S.dirty) setCp(lastRes.text);
   else { S.stale = S.src.trim() !== ''; updateBanner(); }
@@ -1701,7 +1705,7 @@ $('btnPaste').onclick = async () => {
 $('btnSample').onclick = () => setSrc(SAMPLE);
 $('btnClear').onclick = () => {
   if (S.src.trim() && !confirm('Tømme originalen?')) return;
-  ['fTitle', 'fArtist', 'fKey', 'fCapo', 'fSub'].forEach(id => { $(id).value = ''; });
+  ['fTitle', 'fArtist', 'fKey', 'fCapo', 'fSub', 'fComment'].forEach(id => { $(id).value = ''; });
   setSrc('');
 };
 const dropHost = $('edSrc');
@@ -1715,7 +1719,7 @@ Object.entries(CHECKS).forEach(([id, key]) => $(id).addEventListener('change', (
 $('oSnap').onchange = () => { S.opts.snap = Number($('oSnap').value); runConvert(); };
 $('oLoose').onchange = () => { S.opts.loose = $('oLoose').value; runConvert(); };
 let fieldTimer = 0;
-['fTitle', 'fArtist', 'fKey', 'fCapo', 'fSub'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(fieldTimer); fieldTimer = setTimeout(runConvert, 150); }));
+['fTitle', 'fArtist', 'fKey', 'fCapo', 'fSub', 'fComment'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(fieldTimer); fieldTimer = setTimeout(runConvert, 150); }));
 $('btnReconvert').onclick = () => convertNow(false);
 $('btnBannerConvert').onclick = () => convertNow(true);
 
@@ -1845,7 +1849,7 @@ function toast(msg) {
   $('oSnap').value = String(S.opts.snap);
   $('oLoose').value = S.opts.loose;
   $('fTitle').value = S.fields.title; $('fArtist').value = S.fields.artist;
-  $('fKey').value = S.fields.key; $('fCapo').value = S.fields.capo; $('fSub').value = S.fields.subtitle;
+  $('fKey').value = S.fields.key; $('fCapo').value = S.fields.capo; $('fSub').value = S.fields.subtitle; $('fComment').value = S.fields.comment || '';
   if (S.fnDirty) $('fn').value = S.fn;
 
   lastPane = 'cp';
@@ -1864,6 +1868,7 @@ function toast(msg) {
   $('fArtist').placeholder = d.artist || 'Artist';
   $('fKey').placeholder = d.key || 'f.eks. C eller Am';
   $('fCapo').placeholder = d.capo || 'ingen';
+  $('fComment').placeholder = d.comment || 'f.eks. tags eller fri kommentar – vises i Sangarkivet';
   if (S.dirty) { cpEd.set(S.cp); afterCpChange(); }
   else setCp(lastRes.text);
   ghLoadBranch();
