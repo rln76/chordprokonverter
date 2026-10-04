@@ -1701,6 +1701,7 @@ $('btnPaste').onclick = async () => {
 $('btnSample').onclick = () => setSrc(SAMPLE);
 $('btnClear').onclick = () => {
   if (S.src.trim() && !confirm('Tømme originalen?')) return;
+  ['fTitle', 'fArtist', 'fKey', 'fCapo', 'fSub'].forEach(id => { $(id).value = ''; });
   setSrc('');
 };
 const dropHost = $('edSrc');
