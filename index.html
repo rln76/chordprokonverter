@@ -90,6 +90,11 @@
     border-radius: var(--radius); padding: 0.38rem 0.55rem; font: 400 0.85rem 'DM Sans', sans-serif;
   }
   .urlrow input::placeholder { color: var(--text-muted); }
+  .urlmsg { margin: 0.45rem 0.75rem 0; font-size: 0.78rem; line-height: 1.4; color: var(--accent); }
+  .urlhelp { margin: 0.4rem 0.75rem 0; font-size: 0.78rem; color: var(--text-muted); line-height: 1.5; }
+  .urlhelp summary { cursor: pointer; }
+  .urlhelp p { margin-top: 0.35rem; }
+  .urlhelp a.b { display: inline-block; text-decoration: none; margin: 0 0.15rem; cursor: grab; }
   .urlrow input:focus { border-color: var(--accent); outline: none; }
 
   .b {
@@ -327,6 +332,11 @@
       <input type="text" id="nortabsUrl" autocomplete="off" spellcheck="false" placeholder="Nortabs-lenke, f.eks. https://nortabs.net/tab/1616/" aria-label="Lenke til Nortabs-side">
       <button type="button" class="b primary" id="btnNortabs" title="Henter tabben fra Nortabs og lager ChordPro">Hent fra Nortabs</button>
     </div>
+    <p class="urlmsg" id="nortabsMsg" hidden></p>
+    <details class="urlhelp" id="urlHelp">
+      <summary>Virker ikke «Hent fra Nortabs»? Bruk et bokmerke i stedet</summary>
+      <p>Dra <a class="b" id="bookmarklet" href="#">Til konverteren</a> opp på bokmerkelinjen i nettleseren. Åpne så en tab på Nortabs og klikk bokmerket: da åpnes denne siden med sangen ferdig innlagt. (Virker på datamaskin, ikke i mobilnettleseren.)</p>
+    </details>
     <div class="ed" id="edSrc"></div>
     <div class="legend" aria-label="Slik er linjene lest">
       <span class="k-chords">akkordlinje</span>
@@ -1755,14 +1765,18 @@ function parseNortabs(html) {
 }
 // nortabs>>
 // Nettleseren får som regel ikke hente nortabs.net direkte (CORS), så vi prøver i rekkefølge:
-// 1) egen proxy hvis du har satt opp en (lim inn adressen i NORTABS_PROXY, f.eks. 'https://min-proxy.workers.dev/?id='),
-// 2) direkte, 3) en offentlig CORS-proxy.
+// 1) egen proxy hvis du har satt opp en (adressen i NORTABS_PROXY, f.eks. 'https://min-proxy.workers.dev/?id='),
+// 2) direkte, 3) offentlige CORS-proxyer. Svikter alt, finnes bokmerket under «Virker ikke …».
 const NORTABS_PROXY = '';
 function nortabsSources(id) {
   const u = 'https://nortabs.net/tab/' + id + '/';
   const list = [];
-  if (NORTABS_PROXY) list.push(NORTABS_PROXY + id);
-  list.push(u, 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u));
+  if (NORTABS_PROXY) list.push({ name: 'egen proxy', url: NORTABS_PROXY + id });
+  list.push(
+    { name: 'direkte', url: u },
+    { name: 'allorigins', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) },
+    { name: 'codetabs', url: 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u) }
+  );
   return list;
 }
 async function fetchText(url, ms) {
@@ -1774,29 +1788,85 @@ async function fetchText(url, ms) {
     return await r.text();
   } finally { clearTimeout(timer); }
 }
+function nortabsMsg(text) {
+  const el = $('nortabsMsg');
+  el.textContent = text || '';
+  el.hidden = !text;
+  if (text) $('urlHelp').open = true;
+}
+// Felles for «Hent fra Nortabs» og bokmerket: legg sangen inn i Original og lag ChordPro
+function applyImport(res, label) {
+  if (S.dirty && !confirm('Dette overskriver ChordPro-teksten du har redigert. Fortsette?')) return false;
+  ['fKey', 'fCapo', 'fSub', 'fComment'].forEach(i => { $(i).value = ''; });
+  $('fTitle').value = res.title || ''; $('fArtist').value = res.artist || '';
+  S.dirty = false;
+  setSrc(res.text);
+  toast('Hentet «' + (res.title || 'sangen') + '» fra ' + label);
+  return true;
+}
 async function fetchNortabs() {
   const id = nortabsId($('nortabsUrl').value);
+  nortabsMsg('');
   if (!id) { toast('Lim inn en lenke som ser ut som https://nortabs.net/tab/1616/'); return; }
   const btn = $('btnNortabs');
   btn.disabled = true; btn.textContent = 'Henter …';
+  const fails = [];
   try {
     let res = null;
     for (const src of nortabsSources(id)) {
-      try { res = parseNortabs(await fetchText(src, 8000)); } catch { res = null; }
+      try {
+        res = parseNortabs(await fetchText(src.url, 8000));
+        if (!res) fails.push(src.name + ' (svaret inneholdt ingen tab)');
+      } catch (e) {
+        res = null;
+        fails.push(src.name + ' (' + (e.name === 'AbortError' ? 'tidsavbrudd' : e.name === 'TypeError' ? 'blokkert eller ingen kontakt' : e.message) + ')');
+      }
       if (res) break;
     }
-    if (!res) throw new Error('Fikk ikke hentet tabben fra Nortabs. Kopier den fra siden og lim den inn i Original i stedet.');
-    if (S.dirty && !confirm('Dette overskriver ChordPro-teksten du har redigert. Fortsette?')) return;
-    ['fKey', 'fCapo', 'fSub', 'fComment'].forEach(i => { $(i).value = ''; });
-    $('fTitle').value = res.title; $('fArtist').value = res.artist;
-    S.dirty = false;
-    setSrc(res.text);
-    toast('Hentet «' + (res.title || 'sangen') + '» fra Nortabs');
-  } catch (e) {
-    toast(e.message);
+    if (!res) {
+      nortabsMsg('Fikk ikke hentet tabben: ' + fails.join(', ') + '. Prøv bokmerket under, eller kopier tabben fra Nortabs og lim den inn i Original.');
+      return;
+    }
+    applyImport(res, 'Nortabs');
   } finally {
     btn.disabled = false; btn.textContent = 'Hent fra Nortabs';
   }
+}
+// Bokmerket kjøres på Nortabs-siden og åpner konverteren med sangen i adressen (#nt=…)
+function bookmarkletMain(base) {
+  var pre = [].slice.call(document.querySelectorAll('pre')).sort(function (a, b) { return b.textContent.length - a.textContent.length; })[0];
+  if (!pre) { alert('Fant ingen tab på denne siden.'); return; }
+  var c = pre.cloneNode(true);
+  [].forEach.call(c.querySelectorAll('br'), function (b) { b.replaceWith('\n'); });
+  function last(t) {
+    var r = null;
+    [].forEach.call(document.querySelectorAll(t), function (h) { if (pre.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_PRECEDING) r = h; });
+    return r;
+  }
+  function tx(e) { return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; }
+  var t = tx(last('h2')), a = tx(last('h3'));
+  if (!t || !a) {
+    var raw = (document.title || '').replace(/\s*\((?:Grep|Tab)\)\s*$/i, ''), i = raw.indexOf(' - ');
+    if (i > 0) { a = a || raw.slice(0, i).trim(); t = t || raw.slice(i + 3).trim(); } else t = t || raw;
+  }
+  var o = { t: t, a: a, x: c.textContent.replace(/\u00a0/g, ' ') };
+  window.open(base + '\x23nt=' + encodeURIComponent(JSON.stringify(o)));
+}
+function setupBookmarklet() {
+  const base = location.href.split('#')[0];
+  $('bookmarklet').href = 'javascript:(' + encodeURI(bookmarkletMain.toString()) + ')(' + encodeURI(JSON.stringify(base)) + ');';
+  $('bookmarklet').addEventListener('click', e => { e.preventDefault(); toast('Ikke klikk her: dra knappen opp på bokmerkelinjen.'); });
+}
+function importFromHash() {
+  const m = location.hash.match(/^#nt=(.*)$/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const o = JSON.parse(decodeURIComponent(m[1]));
+    const text = String(o.x || '').replace(/\r\n?/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
+    if (!text.trim()) throw new Error('tom');
+    applyImport({ title: String(o.t || '').trim(), artist: String(o.a || '').trim(), text }, 'Nortabs');
+  } catch { toast('Kunne ikke lese sangen fra bokmerket.'); }
 }
 $('btnNortabs').onclick = fetchNortabs;
 $('nortabsUrl').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fetchNortabs(); } });
@@ -1960,6 +2030,8 @@ function toast(msg) {
   if (S.dirty) { cpEd.set(S.cp); afterCpChange(); }
   else setCp(lastRes.text);
   ghLoadBranch();
+  setupBookmarklet();
+  importFromHash();
 })();
 </script>
 </body>
